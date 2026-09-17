@@ -23,6 +23,8 @@ def _reset_all() -> None:
         "env_readings",
         "restorations",
         "loan_records",
+        "exhibition_exceptions",
+        "exhibition_change_orders",
         "exhibition_items",
         "exhibitions",
         "movements",
@@ -188,6 +190,7 @@ def _seed(db) -> None:
         end_date=today + timedelta(days=240),
         curator="林知秋",
         description="遴选馆藏陶瓷精品,呈现中国古代制瓷工艺与审美演进。",
+        install_plan="开展前 5 日进场:先通柜后独立柜,恒温展柜提前 24 小时通电运行;每日 17:00 前完成当日点位验收。",
     )
     # 在展:青铜文明(第三展厅)
     ex2 = models.Exhibition(
@@ -197,6 +200,7 @@ def _seed(db) -> None:
         end_date=today + timedelta(days=46),
         curator="赵元朗",
         description="以商周至战国青铜器为主线,展示礼乐文明的发展脉络。",
+        install_plan="中心展台承重复核后进场;大型器物使用吊装带与定制囊匣,两人一组点交。",
     )
     # 已结束:书画珍品展(第二展厅)
     ex3 = models.Exhibition(
@@ -206,8 +210,9 @@ def _seed(db) -> None:
         end_date=today - timedelta(days=200),
         curator="林知秋",
         description="展出馆藏宋清书画摹本与明清书法精品。",
+        install_plan="书画类照度≤50lx,恒温展柜提前 48 小时调试;挂轴类两人配合上墙。",
     )
-    # 筹备中:临时大展
+    # 筹备中:临时大展(清单已冻结)
     ex4 = models.Exhibition(
         title="丝路华章——唐代三彩艺术特展",
         venue="临时展厅",
@@ -215,20 +220,40 @@ def _seed(db) -> None:
         end_date=today + timedelta(days=120),
         curator="苏望舒",
         description="聚焦唐三彩器物与丝路文化交流,部分展品借展自兄弟博物馆。",
+        install_plan="开展前 3 日进场,先布景后上展;三彩类器物全部使用独立防震展柜,点位图见附件。",
+        list_frozen=True,
+        frozen_at=_dt(today - timedelta(days=3), 15),
+        frozen_by="苏望舒",
     )
     db.add_all([ex1, ex2, ex3, ex4])
     db.flush()
 
-    def _mount(ex, acc, display, days_ago):
+    def _mount(ex, acc, display, days_ago, acceptor="保管部·周文澜", photos=None, exceptions=None):
+        """布展并登记现场验收(验收人/照片说明/异常项)。"""
         c = colls[acc]
+        mounted_at = _dt(today - timedelta(days=days_ago), 10)
         item = models.ExhibitionItem(
             exhibition_id=ex.id,
             collection_id=c.id,
             display_location=display,
-            mounted_at=_dt(today - timedelta(days=days_ago)),
-            status="已布展",
+            planned_mount_date=ex.start_date - timedelta(days=2),
+            mounted_at=mounted_at,
+            mount_acceptor=acceptor,
+            mount_photo_notes=photos or [],
+            status=models.ITEM_MOUNTED,
         )
         db.add(item)
+        db.flush()
+        for note in exceptions or []:
+            db.add(
+                models.ExhibitionException(
+                    item_id=item.id,
+                    phase=models.PHASE_MOUNT,
+                    note=note,
+                    created_by=acceptor,
+                    created_at=mounted_at,
+                )
+            )
         db.add(
             models.Movement(
                 collection_id=c.id,
@@ -236,6 +261,7 @@ def _seed(db) -> None:
                 from_location_id=c.location_id,
                 purpose=f"布展:{ex.title}",
                 operator="策展部",
+                handler=acceptor,
                 move_date=_dt(today - timedelta(days=days_ago), 9),
                 remark=display,
             )
@@ -244,28 +270,62 @@ def _seed(db) -> None:
         c.location_id = None
         return item
 
-    # 当前在展陶瓷 2 件
-    _mount(ex1, "GY-2018-0042", "第一展厅独立展柜 C-03", 120)
-    _mount(ex1, "GY-2015-0117", "第一展厅通柜 A-12", 120)
+    # 当前在展陶瓷 2 件(梅瓶带一条未解决的布展异常)
+    _mount(
+        ex1,
+        "GY-2018-0042",
+        "第一展厅独立展柜 C-03",
+        120,
+        photos=["C-03 展柜就位全景", "梅瓶入柜后正侧面点交照"],
+        exceptions=["独立展柜 C-03 照度传感器读数偏高,待设备部复核调光"],
+    )
+    _mount(
+        ex1,
+        "GY-2015-0117",
+        "第一展厅通柜 A-12",
+        120,
+        photos=["通柜 A-12 点位照"],
+    )
     # 当前在展青铜 1 件
-    _mount(ex2, "QT-2009-0008", "第三展厅中心展台 01", 45)
+    _mount(
+        ex2,
+        "QT-2009-0008",
+        "第三展厅中心展台 01",
+        45,
+        photos=["中心展台吊装就位照", "鼎身点交细节照 3 张"],
+    )
 
-    # 已结束书画展:布展后撤展归库
-    for acc, disp in [
-        ("SH-2012-0066", "第二展厅恒温展柜 B-01"),
-        ("SH-2020-0091", "第二展厅通柜 B-08"),
+    # 已结束书画展:布展后撤展归库(含撤展验收;画轴留一条未解决撤展异常)
+    for acc, disp, dismount_exceptions in [
+        ("SH-2012-0066", "第二展厅恒温展柜 B-01", ["撤展点交发现画轴下轴头包角细微开裂,已拍照存档,待修复部评估"]),
+        ("SH-2020-0091", "第二展厅通柜 B-08", []),
     ]:
         c = colls[acc]
-        db.add(
-            models.ExhibitionItem(
-                exhibition_id=ex3.id,
-                collection_id=c.id,
-                display_location=disp,
-                mounted_at=_dt(today - timedelta(days=300)),
-                dismounted_at=_dt(today - timedelta(days=200)),
-                status="已撤展",
-            )
+        item = models.ExhibitionItem(
+            exhibition_id=ex3.id,
+            collection_id=c.id,
+            display_location=disp,
+            planned_mount_date=ex3.start_date - timedelta(days=2),
+            mounted_at=_dt(today - timedelta(days=300), 10),
+            mount_acceptor="保管部·周文澜",
+            mount_photo_notes=["入柜点交照", "展签核对照"],
+            dismounted_at=_dt(today - timedelta(days=200), 16),
+            dismount_acceptor="保管部·周文澜",
+            dismount_photo_notes=["撤展点交照", "装箱封存照"],
+            status=models.ITEM_DISMOUNTED,
         )
+        db.add(item)
+        db.flush()
+        for note in dismount_exceptions:
+            db.add(
+                models.ExhibitionException(
+                    item_id=item.id,
+                    phase=models.PHASE_DISMOUNT,
+                    note=note,
+                    created_by="保管部·周文澜",
+                    created_at=_dt(today - timedelta(days=200), 16),
+                )
+            )
         db.add(
             models.Movement(
                 collection_id=c.id,
@@ -284,6 +344,56 @@ def _seed(db) -> None:
                 move_date=_dt(today - timedelta(days=200), 16),
             )
         )
+
+    # 筹备中展览 ex4:清单已冻结,2 件待布展(含展位与计划安装日期)
+    for acc, disp, plan_date in [
+        ("SC-2014-0027", "临时展厅独立展柜 T-02", ex4.start_date - timedelta(days=3)),
+        ("SS-2017-0049", "临时展厅通柜 T-11", ex4.start_date - timedelta(days=3)),
+    ]:
+        db.add(
+            models.ExhibitionItem(
+                exhibition_id=ex4.id,
+                collection_id=colls[acc].id,
+                display_location=disp,
+                planned_mount_date=plan_date,
+                status=models.ITEM_PLANNED,
+            )
+        )
+    db.flush()
+
+    # 变更单样例 1:ex4 清单已冻结 → 申请增展三彩骆驼(待西安归还,待审批)
+    db.add(
+        models.ExhibitionChangeOrder(
+            exhibition_id=ex4.id,
+            order_type=models.CO_ADD,
+            add_collection_id=colls["GY-2022-0103"].id,
+            display_location="临时展厅中心独立柜 T-01",
+            reason="三彩骆驼为本展核心器物,现借展西安,对方已来函确认展前归还,申请增补入清单。",
+            applicant="苏望舒",
+            status=models.CO_PENDING,
+            created_at=_dt(today - timedelta(days=2), 11),
+        )
+    )
+    # 变更单样例 2:ex2 开展中 → 申请替换展品(青铜鼎轮换保养,待审批)
+    ding_item = (
+        db.query(models.ExhibitionItem)
+        .filter_by(exhibition_id=ex2.id, collection_id=colls["QT-2009-0008"].id)
+        .first()
+    )
+    db.add(
+        models.ExhibitionChangeOrder(
+            exhibition_id=ex2.id,
+            order_type=models.CO_REPLACE,
+            remove_item_id=ding_item.id,
+            remove_collection_id=ding_item.collection_id,
+            add_collection_id=colls["QT-2016-0033"].id,
+            display_location="第三展厅中心展台 01",
+            reason="青铜鼎上展已 45 天,按计划轮换回库保养;以蟠螭纹青铜壶替换中心展台点位。",
+            applicant="赵元朗",
+            status=models.CO_PENDING,
+            created_at=_dt(today - timedelta(days=1), 14),
+        )
+    )
     db.flush()
 
     # ---------------- 修复(已完成 1 + 进行中 1) ----------------

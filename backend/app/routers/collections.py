@@ -64,6 +64,39 @@ def get_collection(collection_id: int, db: Session = Depends(get_db)):
     return c
 
 
+@router.get(
+    "/api/collections/{collection_id}/exhibition-exceptions",
+    response_model=list[schemas.CollectionExceptionOut],
+)
+def collection_exhibition_exceptions(
+    collection_id: int,
+    db: Session = Depends(get_db),
+    unresolved_only: bool = False,
+):
+    """藏品在各展览布展/撤展中产生的现场异常(未解决的在藏品详情持续可见)。"""
+    _get_collection_or_404(db, collection_id)
+    q = (
+        db.query(models.ExhibitionException, models.ExhibitionItem, models.Exhibition)
+        .join(
+            models.ExhibitionItem,
+            models.ExhibitionException.item_id == models.ExhibitionItem.id,
+        )
+        .join(models.Exhibition, models.ExhibitionItem.exhibition_id == models.Exhibition.id)
+        .filter(models.ExhibitionItem.collection_id == collection_id)
+    )
+    if unresolved_only:
+        q = q.filter(models.ExhibitionException.resolved.is_(False))
+    rows = q.order_by(models.ExhibitionException.created_at.desc()).all()
+    result = []
+    for exc, item, ex in rows:
+        out = schemas.CollectionExceptionOut.model_validate(exc)
+        out.exhibition_id = ex.id
+        out.exhibition_title = ex.title
+        out.display_location = item.display_location
+        result.append(out)
+    return result
+
+
 @router.post("/api/collections", response_model=schemas.CollectionDetail)
 def create_collection(payload: schemas.CollectionCreate, db: Session = Depends(get_db)):
     if db.query(models.Collection).filter(

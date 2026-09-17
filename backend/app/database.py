@@ -49,6 +49,8 @@ def reset_sqlite_sequence():
             "env_readings",
             "restorations",
             "loan_records",
+            "exhibition_exceptions",
+            "exhibition_change_orders",
             "exhibition_items",
             "exhibitions",
             "movements",

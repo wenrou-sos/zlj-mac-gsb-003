@@ -37,6 +37,11 @@ const routes = [
         component: () => import('../views/ExhibitionsView.vue'),
       },
       {
+        path: 'exhibitions/:id',
+        name: '展览详情',
+        component: () => import('../views/ExhibitionDetailView.vue'),
+      },
+      {
         path: 'restorations',
         name: '修复管理',
         component: () => import('../views/RestorationsView.vue'),

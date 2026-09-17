@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -19,6 +19,7 @@ const restorations = ref([])
 const loans = ref([])
 const exhibitions = ref([])
 const locations = ref([])
+const exExceptions = ref([])
 
 const moveDialog = ref(false)
 const moveForm = ref({ move_type: '移库', to_location_id: null, purpose: '', operator: '', remark: '' })
@@ -44,7 +45,10 @@ async function load() {
   const allEx = await exhibitionApi.list()
   loans.value = loans.value.filter((l) => l.collection_id === id)
   exhibitions.value = allEx.filter((e) => e.items.some((i) => i.collection_id === id))
+  exExceptions.value = await collectionApi.exhibitionExceptions(id)
 }
+
+const openExExceptions = computed(() => exExceptions.value.filter((e) => !e.resolved))
 
 async function submitMove() {
   if (['移库', '入库'].includes(moveForm.value.move_type) && !moveForm.value.to_location_id) {
@@ -103,6 +107,27 @@ onMounted(async () => {
       </el-descriptions>
     </el-card>
 
+    <el-alert
+      v-if="openExExceptions.length"
+      type="error"
+      :closable="false"
+      style="margin-top:14px"
+      :title="`${openExExceptions.length} 条布展/撤展异常未解决`"
+    >
+      <div v-for="e in openExExceptions" :key="e.id" style="display:flex;align-items:center;gap:8px;padding:3px 0">
+        <el-tag size="small" type="danger" effect="plain">{{ e.phase }}异常</el-tag>
+        <span style="flex:1">
+          「{{ e.exhibition_title }}」{{ e.note }}
+          <span style="color:#909399;font-size:12px">
+            ({{ e.created_at.replace('T', ' ').slice(0, 16) }}<template v-if="e.created_by"> · {{ e.created_by }}</template>)
+          </span>
+        </span>
+        <el-button link type="primary" size="small" @click="$router.push(`/exhibitions/${e.exhibition_id}`)">
+          前往展览处理
+        </el-button>
+      </div>
+    </el-alert>
+
     <el-card style="margin-top:14px" shadow="never">
       <el-tabs>
         <el-tab-pane label="出入库流转">
@@ -143,7 +168,21 @@ onMounted(async () => {
                 :key="it.id"
                 style="font-size:12px;color:#909399"
               >
-                展位:{{ it.display_location || '—' }} · {{ it.status }}
+                <div>
+                  展位:{{ it.display_location || '—' }} · {{ it.status }}
+                  <template v-if="it.mounted_at">
+                    · 布展验收 {{ it.mount_acceptor || '—' }} @ {{ it.mounted_at.replace('T', ' ').slice(0, 16) }}
+                  </template>
+                  <template v-if="it.dismounted_at">
+                    · 撤展验收 {{ it.dismount_acceptor || '—' }} @ {{ it.dismounted_at.replace('T', ' ').slice(0, 16) }}
+                  </template>
+                </div>
+                <div v-for="e in (it.exceptions || [])" :key="e.id" style="margin-top:2px">
+                  <el-tag size="small" :type="e.resolved ? 'info' : 'danger'" effect="plain">
+                    {{ e.phase }}异常 · {{ e.resolved ? '已解决' : '未解决' }}
+                  </el-tag>
+                  <span :style="{ color: e.resolved ? '#909399' : '#f56c6c' }">{{ e.note }}</span>
+                </div>
               </div>
             </el-timeline-item>
           </el-timeline>

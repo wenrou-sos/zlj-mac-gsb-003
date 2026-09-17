@@ -27,6 +27,8 @@ export const collectionApi = {
   remove: (id) => http.delete(`/api/collections/${id}`).then((r) => r.data),
   move: (id, data) =>
     http.post(`/api/collections/${id}/movements`, data).then((r) => r.data),
+  exhibitionExceptions: (id, params) =>
+    http.get(`/api/collections/${id}/exhibition-exceptions`, { params }).then((r) => r.data),
 }
 
 export const movementApi = {
@@ -46,14 +48,32 @@ export const exhibitionApi = {
   list: (params) => http.get('/api/exhibitions', { params }).then((r) => r.data),
   get: (id) => http.get(`/api/exhibitions/${id}`).then((r) => r.data),
   create: (data) => http.post('/api/exhibitions', data).then((r) => r.data),
+  update: (id, data) => http.put(`/api/exhibitions/${id}`, data).then((r) => r.data),
+  freeze: (id, operator) =>
+    http.post(`/api/exhibitions/${id}/freeze`, { operator }).then((r) => r.data),
+  unfreeze: (id) => http.post(`/api/exhibitions/${id}/unfreeze`).then((r) => r.data),
   addItem: (id, data) =>
     http.post(`/api/exhibitions/${id}/items`, data).then((r) => r.data),
-  dismount: (id, itemId, return_location_id) =>
-    http
-      .delete(`/api/exhibitions/${id}/items/${itemId}`, {
-        params: return_location_id ? { return_location_id } : {},
-      })
-      .then((r) => r.data),
+  updateItem: (id, itemId, data) =>
+    http.put(`/api/exhibitions/${id}/items/${itemId}`, data).then((r) => r.data),
+  removeItem: (id, itemId) =>
+    http.delete(`/api/exhibitions/${id}/items/${itemId}`).then((r) => r.data),
+  mount: (id, itemId, data) =>
+    http.post(`/api/exhibitions/${id}/items/${itemId}/mount`, data).then((r) => r.data),
+  dismount: (id, itemId, data) =>
+    http.post(`/api/exhibitions/${id}/items/${itemId}/dismount`, data).then((r) => r.data),
+  addException: (id, itemId, data) =>
+    http.post(`/api/exhibitions/${id}/items/${itemId}/exceptions`, data).then((r) => r.data),
+  resolveException: (exceptionId, data) =>
+    http.post(`/api/exhibitions/exceptions/${exceptionId}/resolve`, data).then((r) => r.data),
+  createChangeOrder: (id, data) =>
+    http.post(`/api/exhibitions/${id}/change-orders`, data).then((r) => r.data),
+  approveChangeOrder: (orderId, data) =>
+    http.post(`/api/exhibitions/change-orders/${orderId}/approve`, data).then((r) => r.data),
+  rejectChangeOrder: (orderId, data) =>
+    http.post(`/api/exhibitions/change-orders/${orderId}/reject`, data).then((r) => r.data),
+  executeChangeOrder: (orderId, data) =>
+    http.post(`/api/exhibitions/change-orders/${orderId}/execute`, data).then((r) => r.data),
 }
 
 export const restorationApi = {
