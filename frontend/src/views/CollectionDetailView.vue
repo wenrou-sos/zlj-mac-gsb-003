@@ -19,6 +19,7 @@ const restorations = ref([])
 const loans = ref([])
 const exhibitions = ref([])
 const locations = ref([])
+const exAnomalies = ref([])
 
 const moveDialog = ref(false)
 const moveForm = ref({ move_type: '移库', to_location_id: null, purpose: '', operator: '', remark: '' })
@@ -36,14 +37,20 @@ const moveTypeMap = {
   借展归还: 'success',
 }
 
+function fmtTime(t) {
+  return t ? t.replace('T', ' ').slice(0, 16) : '—'
+}
+
 async function load() {
   detail.value = await collectionApi.get(id)
   movements.value = await movementApi.list({ collection_id: id, limit: 500 })
   restorations.value = await restorationApi.list({ collection_id: id })
   loans.value = await loanApi.list()
   const allEx = await exhibitionApi.list()
+  const allAnomalies = await exhibitionApi.openAnomalies({ open_only: false })
   loans.value = loans.value.filter((l) => l.collection_id === id)
   exhibitions.value = allEx.filter((e) => e.items.some((i) => i.collection_id === id))
+  exAnomalies.value = allAnomalies.filter((a) => a.collection_id === id)
 }
 
 async function submitMove() {
@@ -71,6 +78,33 @@ onMounted(async () => {
 <template>
   <div class="page-container" v-if="detail">
     <el-page-header @back="$router.push('/collections')" content="返回藏品列表" />
+
+    <!-- 未闭环的布展/撤展异常:在藏品详情中持续可见 -->
+    <el-card
+      v-if="exAnomalies.some((a) => !a.resolved)"
+      shadow="never"
+      style="margin-top:14px;border-color:#f56c6c"
+    >
+      <template #header>
+        <div style="display:flex;align-items:center;gap:8px;color:#f56c6c;font-weight:600">
+          <el-icon><WarningFilled /></el-icon>
+          本藏品存在未闭环的布展/撤展异常
+        </div>
+      </template>
+      <el-alert
+        v-for="a in exAnomalies.filter((x) => !x.resolved)"
+        :key="`${a.item_id}-${a.phase}`"
+        :title="`【${a.phase}异常】${a.exhibition_title} · ${fmtTime(a.occurred_at)} · 验收人 ${a.acceptor || '—'}`"
+        :description="a.anomaly"
+        type="error"
+        :closable="false"
+        style="margin-bottom:8px"
+      >
+        <router-link :to="`/exhibitions/${a.exhibition_id}`" style="margin-left:8px">
+          前往展览详情登记处理 →
+        </router-link>
+      </el-alert>
+    </el-card>
 
     <el-card style="margin-top:14px" shadow="never">
       <div class="head">
@@ -135,15 +169,52 @@ onMounted(async () => {
               <el-tag size="small" style="margin-left:8px" :type="ex.status === '开展中' ? 'primary' : 'info'">
                 {{ ex.status }}
               </el-tag>
+              <el-tag v-if="ex.frozen" size="small" type="warning" effect="plain" style="margin-left:6px">
+                清单冻结
+              </el-tag>
               <div style="font-size:13px;color:#606266">
                 展厅:{{ ex.venue }} · 策展人:{{ ex.curator || '—' }}
               </div>
               <div
                 v-for="it in ex.items.filter((i) => i.collection_id === id)"
                 :key="it.id"
-                style="font-size:12px;color:#909399"
+                class="ex-item-block"
               >
-                展位:{{ it.display_location || '—' }} · {{ it.status }}
+                <div style="font-size:13px">
+                  <el-tag size="small" :type="it.status === '已布展' ? 'primary' : it.status === '待布展' ? 'info' : 'success'">
+                    {{ it.status }}
+                  </el-tag>
+                  <span style="margin-left:8px">展位:{{ it.display_location || '—' }}</span>
+                  <el-tag v-if="it.change_order_id" size="small" type="warning" effect="plain" style="margin-left:6px">
+                    变更单 #{{ it.change_order_id }}
+                  </el-tag>
+                </div>
+                <div v-if="it.install_plan_note" class="sub-text">安装计划:{{ it.install_plan_note }}</div>
+
+                <div v-if="it.mounted_at" class="accept-line">
+                  布展验收:{{ fmtTime(it.mounted_at) }} · {{ it.mount_acceptor || '—' }}
+                  <span v-if="it.mount_photo_note"> · 📷{{ it.mount_photo_note }}</span>
+                </div>
+                <el-alert
+                  v-if="it.mount_anomaly"
+                  :title="it.mount_anomaly_resolved ? '布展异常已闭环' : '布展异常未闭环'"
+                  :description="it.mount_anomaly"
+                  :type="it.mount_anomaly_resolved ? 'success' : 'error'"
+                  :closable="false"
+                  style="margin:4px 0"
+                />
+                <div v-if="it.dismounted_at" class="accept-line">
+                  撤展验收:{{ fmtTime(it.dismounted_at) }} · {{ it.dismount_acceptor || '—' }}
+                  <span v-if="it.dismount_photo_note"> · 📷{{ it.dismount_photo_note }}</span>
+                </div>
+                <el-alert
+                  v-if="it.dismount_anomaly"
+                  :title="it.dismount_anomaly_resolved ? '撤展异常已闭环' : '撤展异常未闭环'"
+                  :description="it.dismount_anomaly"
+                  :type="it.dismount_anomaly_resolved ? 'success' : 'error'"
+                  :closable="false"
+                  style="margin:4px 0"
+                />
               </div>
             </el-timeline-item>
           </el-timeline>
@@ -261,5 +332,22 @@ onMounted(async () => {
   margin-top: 8px;
   color: #606266;
   font-size: 13px;
+}
+.ex-item-block {
+  margin: 6px 0 10px;
+  padding: 6px 10px;
+  border-left: 3px solid #dcdfe6;
+  background: #fafafa;
+  border-radius: 2px;
+}
+.accept-line {
+  font-size: 12px;
+  color: #606266;
+  margin-top: 4px;
+}
+.sub-text {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
 }
 </style>

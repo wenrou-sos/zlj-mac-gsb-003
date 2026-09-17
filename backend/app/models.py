@@ -38,6 +38,26 @@ ALERT_NORMAL = "正常"
 ALERT_WARNING = "预警"
 ALERT_CRITICAL = "严重"
 
+# 展览状态
+EX_STATUS_PREP = "筹备中"
+EX_STATUS_OPEN = "开展中"
+EX_STATUS_CLOSED = "已结束"
+
+# 展品条目状态(清单条目 + 现场安装状态)
+ITEM_PLANNED = "待布展"
+ITEM_MOUNTED = "已布展"
+ITEM_DISMOUNTED = "已撤展"
+ITEM_REMOVED = "已移出"
+
+# 变更单类型 / 状态
+CO_ADD = "新增"
+CO_REMOVE = "撤除"
+CO_REPLACE = "替换"
+CO_PENDING = "待审批"
+CO_APPROVED = "已批准"
+CO_REJECTED = "已驳回"
+CO_EXECUTED = "已执行"
+
 
 class Location(Base):
     __tablename__ = "locations"
@@ -131,25 +151,104 @@ class Exhibition(Base):
     status: Mapped[str] = mapped_column(String(20), default="筹备中")  # 筹备中/开展中/已结束
     curator: Mapped[str | None] = mapped_column(String(50), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 展品清单冻结:筹备阶段可自由增删,冻结后只能通过变更单调整
+    frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    frozen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    frozen_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     items: Mapped[list["ExhibitionItem"]] = relationship(
+        back_populates="exhibition", cascade="all, delete-orphan"
+    )
+    change_orders: Mapped[list["ChangeOrder"]] = relationship(
         back_populates="exhibition", cascade="all, delete-orphan"
     )
 
 
 class ExhibitionItem(Base):
+    """展品清单条目:展位/安装计划 + 布展、撤展现场验收记录"""
+
     __tablename__ = "exhibition_items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     exhibition_id: Mapped[int] = mapped_column(ForeignKey("exhibitions.id"), index=True)
     collection_id: Mapped[int] = mapped_column(ForeignKey("collections.id"), index=True)
     display_location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    install_plan_note: Mapped[str | None] = mapped_column(String(300), nullable=True)  # 安装计划
+    planned_mount_date: Mapped[date | None] = mapped_column(Date, nullable=True)  # 计划布展日期
+    status: Mapped[str] = mapped_column(String(20), default=ITEM_PLANNED)  # 待布展/已布展/已撤展
+
+    # 布展现场验收
     mounted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    mount_acceptor: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 现场验收人
+    mount_photo_note: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 照片说明
+    mount_anomaly: Mapped[str | None] = mapped_column(Text, nullable=True)  # 布展异常项
+    mount_anomaly_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    mount_anomaly_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    mount_anomaly_resolved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # 撤展现场验收
     dismounted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="已布展")  # 已布展/已撤展
+    dismount_acceptor: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    dismount_photo_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    dismount_anomaly: Mapped[str | None] = mapped_column(Text, nullable=True)  # 撤展异常项
+    dismount_anomaly_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    dismount_anomaly_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dismount_anomaly_resolved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # 关联来源变更单(经变更单批准加入清单时记录)
+    change_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("change_orders.id"), nullable=True
+    )
 
     exhibition: Mapped["Exhibition"] = relationship(back_populates="items")
     collection: Mapped["Collection"] = relationship(back_populates="exhibition_items")
+    change_order: Mapped["ChangeOrder | None"] = relationship(
+        back_populates="items", foreign_keys=[change_order_id]
+    )
+
+
+class ChangeOrder(Base):
+    """清单冻结后的展品变更单:新增 / 撤除 / 替换,须审批后执行"""
+
+    __tablename__ = "change_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    exhibition_id: Mapped[int] = mapped_column(ForeignKey("exhibitions.id"), index=True)
+    change_type: Mapped[str] = mapped_column(String(10))  # 新增/撤除/替换
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # 变更事由
+    display_location: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 展位
+    install_plan_note: Mapped[str | None] = mapped_column(String(300), nullable=True)  # 安装计划
+    planned_mount_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default=CO_PENDING, index=True)
+
+    # 新增/替换的新展品
+    add_collection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("collections.id"), nullable=True
+    )
+    # 撤除/替换的原展品条目
+    remove_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exhibition_items.id"), nullable=True
+    )
+    # 快照:原条目在执行时可能被直接移出清单,保留名称便于审计追溯
+    remove_item_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    requested_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    approved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    exhibition: Mapped["Exhibition"] = relationship(back_populates="change_orders")
+    add_collection: Mapped["Collection | None"] = relationship(
+        foreign_keys=[add_collection_id]
+    )
+    remove_item: Mapped["ExhibitionItem | None"] = relationship(
+        foreign_keys=[remove_item_id]
+    )
+    items: Mapped[list["ExhibitionItem"]] = relationship(
+        back_populates="change_order", foreign_keys="ExhibitionItem.change_order_id"
+    )
 
 
 class Restoration(Base):

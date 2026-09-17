@@ -46,14 +46,34 @@ export const exhibitionApi = {
   list: (params) => http.get('/api/exhibitions', { params }).then((r) => r.data),
   get: (id) => http.get(`/api/exhibitions/${id}`).then((r) => r.data),
   create: (data) => http.post('/api/exhibitions', data).then((r) => r.data),
-  addItem: (id, data) =>
+  freeze: (id, frozen_by) =>
+    http.post(`/api/exhibitions/${id}/freeze`, { frozen_by }).then((r) => r.data),
+  planItem: (id, data) =>
     http.post(`/api/exhibitions/${id}/items`, data).then((r) => r.data),
-  dismount: (id, itemId, return_location_id) =>
+  removePlanned: (id, itemId) =>
+    http.delete(`/api/exhibitions/${id}/items/${itemId}`).then((r) => r.data),
+  mount: (id, itemId, data) =>
+    http.post(`/api/exhibitions/${id}/items/${itemId}/mount`, data).then((r) => r.data),
+  dismount: (id, itemId, data) =>
+    http.post(`/api/exhibitions/${id}/items/${itemId}/dismount`, data).then((r) => r.data),
+  resolveAnomaly: (id, itemId, phase, data) =>
     http
-      .delete(`/api/exhibitions/${id}/items/${itemId}`, {
-        params: return_location_id ? { return_location_id } : {},
+      .post(`/api/exhibitions/${id}/items/${itemId}/resolve-anomaly`, data, {
+        params: { phase },
       })
       .then((r) => r.data),
+  createChangeOrder: (id, data) =>
+    http.post(`/api/exhibitions/${id}/change-orders`, data).then((r) => r.data),
+  approveChangeOrder: (id, coId, data) =>
+    http
+      .post(`/api/exhibitions/${id}/change-orders/${coId}/approve`, data)
+      .then((r) => r.data),
+  rejectChangeOrder: (id, coId, data) =>
+    http
+      .post(`/api/exhibitions/${id}/change-orders/${coId}/reject`, data)
+      .then((r) => r.data),
+  openAnomalies: (params) =>
+    http.get('/api/exhibition-anomalies', { params }).then((r) => r.data),
 }
 
 export const restorationApi = {

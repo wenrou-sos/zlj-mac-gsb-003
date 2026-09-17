@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,7 +20,73 @@ from .routers import (
     restorations,
 )
 
+
+def _migrate_missing_columns() -> None:
+    """为已存在的数据库补齐新增字段(零配置演示库平滑升级,生产建议改用 Alembic)。"""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    missing = {
+        "exhibitions": {
+            "frozen": sa.Boolean(),
+            "frozen_at": sa.DateTime(),
+            "frozen_by": sa.String(length=50),
+        },
+        "exhibition_items": {
+            "install_plan_note": sa.String(length=300),
+            "planned_mount_date": sa.Date(),
+            "mount_acceptor": sa.String(length=50),
+            "mount_photo_note": sa.String(length=500),
+            "mount_anomaly": sa.Text(),
+            "mount_anomaly_resolved": sa.Boolean(),
+            "mount_anomaly_resolved_at": sa.DateTime(),
+            "mount_anomaly_resolved_by": sa.String(length=50),
+            "dismount_acceptor": sa.String(length=50),
+            "dismount_photo_note": sa.String(length=500),
+            "dismount_anomaly": sa.Text(),
+            "dismount_anomaly_resolved": sa.Boolean(),
+            "dismount_anomaly_resolved_at": sa.DateTime(),
+            "dismount_anomaly_resolved_by": sa.String(length=50),
+            "change_order_id": sa.Integer(),
+        },
+        "change_orders": {
+            "remove_item_label": sa.String(length=200),
+        },
+    }
+    with engine.begin() as conn:
+        for table, columns in missing.items():
+            if table not in existing_tables:
+                continue
+            present = {col["name"] for col in inspector.get_columns(table)}
+            for name, column_type in columns.items():
+                if name not in present:
+                    conn.execute(
+                        sa.text(
+                            f"ALTER TABLE {table} ADD COLUMN {name} "
+                            + _column_ddl(engine.dialect.name, name, column_type)
+                        )
+                    )
+
+
+def _column_ddl(dialect: str, name: str, col: "sa.Column") -> str:
+    if isinstance(col, sa.Boolean):
+        return "BOOLEAN DEFAULT 0" if dialect == "sqlite" else "BOOLEAN DEFAULT FALSE"
+    if isinstance(col, sa.Integer):
+        return "INTEGER"
+    if isinstance(col, sa.DateTime):
+        return "DATETIME"
+    if isinstance(col, sa.Date):
+        return "DATE"
+    if isinstance(col, sa.Text):
+        return "TEXT"
+    length = getattr(col, "length", 100) or 100
+    return f"VARCHAR({length})"
+
+
 # 自动建表(SQLite / PostgreSQL 均可;如需迁移可在此基础上引入 Alembic)
+_migrate_missing_columns()
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="博物馆藏品管理系统 API", version="1.0.0")
@@ -37,6 +104,7 @@ for router in (
     collections.router,
     locations.router,
     exhibitions.router,
+    exhibitions.anomaly_router,
     restorations.router,
     loans.router,
     environment.router,

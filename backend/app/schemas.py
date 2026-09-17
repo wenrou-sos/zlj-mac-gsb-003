@@ -139,9 +139,17 @@ class ExhibitionCreate(ExhibitionBase):
     pass
 
 
-class ExhibitionItemAdd(BaseModel):
+class ExhibitionItemPlanAdd(BaseModel):
+    """筹备阶段把展品加入清单(仅登记展位与安装计划,不触发现场布展)"""
+
     collection_id: int
     display_location: str | None = None
+    install_plan_note: str | None = None
+    planned_mount_date: date | None = None
+
+
+class ExhibitionFreeze(BaseModel):
+    frozen_by: str | None = None
 
 
 class ExhibitionItemOut(BaseModel):
@@ -149,18 +157,106 @@ class ExhibitionItemOut(BaseModel):
     id: int
     collection_id: int
     display_location: str | None
+    install_plan_note: str | None
+    planned_mount_date: date | None
     mounted_at: datetime | None
     dismounted_at: datetime | None
     status: str
+    mount_acceptor: str | None
+    mount_photo_note: str | None
+    mount_anomaly: str | None
+    mount_anomaly_resolved: bool
+    mount_anomaly_resolved_at: datetime | None
+    mount_anomaly_resolved_by: str | None
+    dismount_acceptor: str | None
+    dismount_photo_note: str | None
+    dismount_anomaly: str | None
+    dismount_anomaly_resolved: bool
+    dismount_anomaly_resolved_at: datetime | None
+    dismount_anomaly_resolved_by: str | None
+    change_order_id: int | None
     collection_name: str | None = None
     accession_no: str | None = None
+    has_open_anomaly: bool = False
+
+
+class MountRequest(BaseModel):
+    """布展现场验收"""
+
+    acceptor: str
+    photo_note: str | None = None
+    anomaly: str | None = None
+    mounted_at: datetime | None = None
+
+
+class DismountRequest(BaseModel):
+    """撤展现场验收"""
+
+    acceptor: str
+    photo_note: str | None = None
+    anomaly: str | None = None
+    return_location_id: int | None = None
+    dismounted_at: datetime | None = None
+
+
+class AnomalyResolve(BaseModel):
+    resolved_by: str
+    note: str | None = None
+
+
+class ChangeOrderCreate(BaseModel):
+    change_type: str  # 新增/撤除/替换
+    reason: str | None = None
+    add_collection_id: int | None = None
+    remove_item_id: int | None = None
+    display_location: str | None = None
+    install_plan_note: str | None = None
+    planned_mount_date: date | None = None
+    requested_by: str | None = None
+
+
+class ChangeOrderApprove(BaseModel):
+    approved_by: str
+    approval_note: str | None = None
+
+
+class ChangeOrderReject(BaseModel):
+    approved_by: str
+    approval_note: str | None = None
+
+
+class ChangeOrderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    exhibition_id: int
+    change_type: str
+    reason: str | None
+    display_location: str | None
+    install_plan_note: str | None
+    planned_mount_date: date | None
+    status: str
+    add_collection_id: int | None
+    remove_item_id: int | None
+    requested_by: str | None
+    requested_at: datetime
+    approved_by: str | None
+    approved_at: datetime | None
+    approval_note: str | None
+    executed_at: datetime | None
+    add_collection_label: str | None = None
+    remove_item_label: str | None = None
 
 
 class ExhibitionOut(ExhibitionBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     status: str
+    frozen: bool
+    frozen_at: datetime | None
+    frozen_by: str | None
     items: list[ExhibitionItemOut] = []
+    change_orders: list[ChangeOrderOut] = []
+    open_anomaly_count: int = 0
 
 
 # ---------- Restoration ----------

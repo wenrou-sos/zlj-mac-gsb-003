@@ -24,6 +24,7 @@ def _reset_all() -> None:
         "restorations",
         "loan_records",
         "exhibition_items",
+        "change_orders",
         "exhibitions",
         "movements",
         "collections",
@@ -219,71 +220,256 @@ def _seed(db) -> None:
     db.add_all([ex1, ex2, ex3, ex4])
     db.flush()
 
-    def _mount(ex, acc, display, days_ago):
+    def _mount(
+        ex,
+        acc,
+        display,
+        days_ago,
+        acceptor,
+        photo_note,
+        anomaly=None,
+        anomaly_resolved=False,
+        resolved_by=None,
+        planned_mount_days=None,
+    ):
+        """完成布展现场验收(藏品出库 -> 展陈中),可携带异常项。"""
         c = colls[acc]
+        mount_dt = _dt(today - timedelta(days=days_ago), 9, 30)
         item = models.ExhibitionItem(
             exhibition_id=ex.id,
             collection_id=c.id,
             display_location=display,
-            mounted_at=_dt(today - timedelta(days=days_ago)),
+            install_plan_note=f"独立展具安装,{display} 点位,双人搬运就位。",
+            planned_mount_date=(
+                today - timedelta(days=planned_mount_days or days_ago)
+            ),
+            mounted_at=mount_dt,
+            mount_acceptor=acceptor,
+            mount_photo_note=photo_note,
+            mount_anomaly=anomaly,
+            mount_anomaly_resolved=anomaly_resolved,
+            mount_anomaly_resolved_at=mount_dt + timedelta(days=1)
+            if anomaly and anomaly_resolved
+            else None,
+            mount_anomaly_resolved_by=resolved_by,
             status="已布展",
         )
         db.add(item)
+        remark = f"照片说明:{photo_note}"
+        if anomaly:
+            remark += f" | 异常项:{anomaly}"
         db.add(
             models.Movement(
                 collection_id=c.id,
                 move_type=models.MOVE_EXHIBIT,
                 from_location_id=c.location_id,
                 purpose=f"布展:{ex.title}",
-                operator="策展部",
-                move_date=_dt(today - timedelta(days=days_ago), 9),
-                remark=display,
+                operator=acceptor,
+                handler=acceptor,
+                move_date=mount_dt,
+                remark=remark,
             )
         )
         c.status = models.STATUS_EXHIBITION
         c.location_id = None
         return item
 
-    # 当前在展陶瓷 2 件
-    _mount(ex1, "GY-2018-0042", "第一展厅独立展柜 C-03", 120)
-    _mount(ex1, "GY-2015-0117", "第一展厅通柜 A-12", 120)
-    # 当前在展青铜 1 件
-    _mount(ex2, "QT-2009-0008", "第三展厅中心展台 01", 45)
-
-    # 已结束书画展:布展后撤展归库
-    for acc, disp in [
-        ("SH-2012-0066", "第二展厅恒温展柜 B-01"),
-        ("SH-2020-0091", "第二展厅通柜 B-08"),
-    ]:
+    def _dismount(ex, item, acc, days_ago, acceptor, photo_note, anomaly=None):
+        """完成撤展现场验收并归库,可携带未闭环的撤展异常。"""
         c = colls[acc]
+        dt = _dt(today - timedelta(days=days_ago), 16, 0)
+        item.status = "已撤展"
+        item.dismounted_at = dt
+        item.dismount_acceptor = acceptor
+        item.dismount_photo_note = photo_note
+        item.dismount_anomaly = anomaly
         db.add(
-            models.ExhibitionItem(
-                exhibition_id=ex3.id,
+            models.Movement(
                 collection_id=c.id,
-                display_location=disp,
-                mounted_at=_dt(today - timedelta(days=300)),
-                dismounted_at=_dt(today - timedelta(days=200)),
-                status="已撤展",
+                move_type=models.MOVE_RETURN,
+                to_location_id=c.location_id,
+                purpose=f"撤展归库:{ex.title}",
+                operator=acceptor,
+                handler=acceptor,
+                move_date=dt,
+                remark=f"照片说明:{photo_note}"
+                + (f" | 异常项:{anomaly}" if anomaly else ""),
             )
         )
+
+    # ---- ex1 在展陶瓷展:2 件正常 + 1 件布展异常未闭环 ----
+    _mount(
+        ex1, "GY-2015-0117", "第一展厅通柜 A-12", 120,
+        acceptor="陈列部·沈青崖",
+        photo_note="通柜内正视、侧视、底座铭牌特写共 6 张,照度 120lx 达标。",
+    )
+    _mount(
+        ex1, "GY-2018-0042", "第一展厅独立展柜 C-03", 120,
+        acceptor="陈列部·沈青崖",
+        photo_note="独立展柜全景、器身四面细节、防震底座定位照片共 8 张。",
+        anomaly="布展时发现展柜左侧灯带照度偏高(实测 198lx),梅瓶左侧受光不均,已临时遮蔽待设备部更换漫射灯带。",
+    )
+
+    # ---- ex2 在展青铜展:1 件布展异常已闭环 ----
+    _mount(
+        ex2, "QT-2009-0008", "第三展厅中心展台 01", 45,
+        acceptor="陈列部·韦承训",
+        photo_note="中心展台全景、双耳与足部细节、围栏间距照片共 7 张。",
+        anomaly="展台水平度偏差 1.2°,当场加垫调平后复测合格。",
+        anomaly_resolved=True,
+        resolved_by="设备部·卢工",
+    )
+
+    # ---- ex3 已结束书画展:撤展验收,1 件撤展异常至今未闭环 ----
+    item_paint = models.ExhibitionItem(
+        exhibition_id=ex3.id,
+        collection_id=colls["SH-2012-0066"].id,
+        display_location="第二展厅恒温展柜 B-01",
+        install_plan_note="恒温恒湿展柜,斜躺支架 15° 展陈。",
+        planned_mount_date=today - timedelta(days=300),
+        status="待布展",
+    )
+    item_fan = models.ExhibitionItem(
+        exhibition_id=ex3.id,
+        collection_id=colls["SH-2020-0091"].id,
+        display_location="第二展厅通柜 B-08",
+        install_plan_note="折扇扇面专用托架,展开角 140°。",
+        planned_mount_date=today - timedelta(days=300),
+        status="待布展",
+    )
+    db.add_all([item_paint, item_fan])
+    db.flush()
+    # 布展验收
+    for it, acc, acceptor in (
+        (item_paint, "SH-2012-0066", "陈列部·沈青崖"),
+        (item_fan, "SH-2020-0091", "陈列部·沈青崖"),
+    ):
+        c = colls[acc]
+        it.status = "已布展"
+        it.mounted_at = _dt(today - timedelta(days=300), 9, 30)
+        it.mount_acceptor = acceptor
+        it.mount_photo_note = "上展前状况照片、展柜定位照片各 4 张。"
         db.add(
             models.Movement(
                 collection_id=c.id,
                 move_type=models.MOVE_EXHIBIT,
                 from_location_id=c.location_id,
                 purpose=f"布展:{ex3.title}",
-                move_date=_dt(today - timedelta(days=300), 9),
+                operator=acceptor,
+                move_date=_dt(today - timedelta(days=300), 9, 30),
             )
         )
-        db.add(
-            models.Movement(
-                collection_id=c.id,
-                move_type=models.MOVE_RETURN,
-                to_location_id=c.location_id,
-                purpose=f"撤展归库:{ex3.title}",
-                move_date=_dt(today - timedelta(days=200), 16),
-            )
+        c.status = models.STATUS_EXHIBITION
+        c.location_id = None
+    db.flush()
+    # 撤展验收:立轴包装时发现水渍异常(未闭环);折扇正常
+    _dismount(
+        ex3, item_paint, "SH-2012-0066", 200,
+        acceptor="保管部·周文澜",
+        photo_note="撤展状况、包装过程、囊匣归库照片共 9 张。",
+        anomaly="撤展点验时发现画轴隔水处有一处约 2cm 水渍样痕迹,与布展照片比对为展期内新出现,已拍照取证,原因待查(疑似展柜凝露)。",
+    )
+    _dismount(
+        ex3, item_fan, "SH-2020-0091", 200,
+        acceptor="保管部·周文澜",
+        photo_note="折扇收合、锦盒归库照片共 5 张,状况与布展时一致。",
+    )
+    db.flush()
+
+    # ---- ex4 筹备中:清单已冻结,含展位/安装计划(均未布展,藏品仍在库) ----
+    hook_item = models.ExhibitionItem(
+        exhibition_id=ex4.id,
+        collection_id=colls["SS-2017-0049"].id,
+        display_location="临时展厅独立柜 T-22",
+        install_plan_note="小型独立柜,45° 斜面展示,温湿度记录仪入柜。",
+        planned_mount_date=today + timedelta(days=18),
+        status="待布展",
+    )
+    hu_item = models.ExhibitionItem(
+        exhibition_id=ex4.id,
+        collection_id=colls["QT-2016-0033"].id,
+        display_location="临时展厅通柜 T-11",
+        install_plan_note="通柜层板加防滑垫,铺首衔环侧另设细节补光。",
+        planned_mount_date=today + timedelta(days=18),
+        status="待布展",
+    )
+    lian_item = models.ExhibitionItem(
+        exhibition_id=ex4.id,
+        collection_id=colls["SC-2014-0027"].id,
+        display_location="临时展厅漆木器专区 T-30",
+        install_plan_note="低照度专区 ≤80lx,展柜预置恒湿缓冲材料。",
+        planned_mount_date=today + timedelta(days=18),
+        status="待布展",
+    )
+    paint_item = models.ExhibitionItem(
+        exhibition_id=ex4.id,
+        collection_id=colls["SH-2012-0066"].id,
+        display_location="临时展厅书画通柜 T-15",
+        install_plan_note="立轴悬挂展陈,墙面轨道灯,照度 ≤50lx。",
+        planned_mount_date=today + timedelta(days=18),
+        status="待布展",
+    )
+    db.add_all([hook_item, hu_item, lian_item, paint_item])
+    ex4.frozen = True
+    ex4.frozen_at = _dt(today - timedelta(days=2), 15, 0)
+    ex4.frozen_by = "策展人·苏望舒"
+    db.flush()
+
+    # 变更单 1:已批准并执行 —— 书画单元调整,以兰亭折扇替换溪山行旅图
+    paint_coll = colls["SH-2012-0066"]
+    fan_coll = colls["SH-2020-0091"]
+    co_replace = models.ChangeOrder(
+        exhibition_id=ex4.id,
+        change_type="替换",
+        reason="书画单元展线调整,经策展委员会评审,改以尺幅更精致的扇面对照三彩纹饰。",
+        display_location="临时展厅书画通柜 T-15",
+        install_plan_note="折扇专用托架,展开角 140°,照度 ≤50lx。",
+        planned_mount_date=today + timedelta(days=18),
+        status="已执行",
+        requested_by="策展助理·韩墨",
+        requested_at=_dt(today - timedelta(days=1), 10, 0),
+        approved_by="馆长办公会·孟馆长",
+        approved_at=_dt(today - timedelta(days=1), 16, 0),
+        approval_note="同意替换,运输与展具按书画类一级防护执行。",
+        executed_at=_dt(today - timedelta(days=1), 16, 5),
+        add_collection_id=fan_coll.id,
+        remove_item_id=paint_item.id,
+        remove_item_label=(
+            f"{paint_coll.accession_no} {paint_coll.name}(原展位 临时展厅书画通柜 T-15)"
+        ),
+    )
+    db.add(co_replace)
+    db.flush()
+    # 执行:原计划条目尚未进场,从清单移出(保留审计行);新展品以变更单来源进入清单待布展
+    paint_item.status = "已移出"
+    paint_item.change_order_id = co_replace.id
+    db.add(
+        models.ExhibitionItem(
+            exhibition_id=ex4.id,
+            collection_id=fan_coll.id,
+            display_location="临时展厅书画通柜 T-15",
+            install_plan_note="折扇专用托架,展开角 140°,照度 ≤50lx。",
+            planned_mount_date=today + timedelta(days=18),
+            status="待布展",
+            change_order_id=co_replace.id,
         )
+    )
+
+    # 变更单 2:待审批 —— 申请新增设色花鸟立轴,补足展线末端纸本单元
+    db.add(
+        models.ChangeOrder(
+            exhibition_id=ex4.id,
+            change_type="新增",
+            reason="展线末端拟增设纸本设色对照单元,申请新增花鸟立轴一件。",
+            display_location="临时展厅通柜 T-33",
+            install_plan_note="立轴挂展,墙面轨道灯,照度 ≤50lx。",
+            planned_mount_date=today + timedelta(days=19),
+            status="待审批",
+            requested_by="策展助理·韩墨",
+            requested_at=datetime.utcnow() - timedelta(hours=20),
+            add_collection_id=colls["SH-2019-0074"].id,
+        )
+    )
     db.flush()
 
     # ---------------- 修复(已完成 1 + 进行中 1) ----------------

@@ -1,8 +1,10 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { collectionApi, exhibitionApi, locationApi } from '../api'
+import { exhibitionApi } from '../api'
 
+const router = useRouter()
 const rows = ref([])
 const loading = ref(false)
 const statusFilter = ref('')
@@ -20,19 +22,7 @@ const form = reactive({
 const rules = {
   title: [{ required: true, message: '请输入展览名称' }],
   venue: [{ required: true, message: '请输入展厅' }],
-  start_date: [{ required: true, message: '请选择开始日期' }],
-  end_date: [{ required: true, message: '请选择结束日期' }],
 }
-
-const itemDialog = ref(false)
-const currentEx = ref(null)
-const candidates = ref([])
-const itemForm = reactive({ collection_id: null, display_location: '' })
-
-const dismountDialog = ref(false)
-const dismountTarget = ref({ ex: null, item: null })
-const returnLocation = ref(null)
-const locations = ref([])
 
 async function load() {
   loading.value = true
@@ -44,70 +34,48 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, { title: '', venue: '', start_date: '', end_date: '', curator: '', description: '' })
+  Object.assign(form, {
+    title: '',
+    venue: '',
+    start_date: '',
+    end_date: '',
+    curator: '',
+    description: '',
+  })
   createDialog.value = true
 }
 
 async function submitCreate() {
   await formRef.value.validate()
-  if (form.end_date <= form.start_date) {
-    ElMessage.warning('结束日期必须晚于开始日期')
+  if (!form.start_date || !form.end_date || form.end_date <= form.start_date) {
+    ElMessage.warning('请选择有效的展期(结束日期须晚于开始日期)')
     return
   }
-  await exhibitionApi.create({ ...form })
-  ElMessage.success('展览已创建')
+  const ex = await exhibitionApi.create({ ...form })
+  ElMessage.success('展览已创建,请在详情中维护展品清单与安装计划')
   createDialog.value = false
-  load()
+  router.push(`/exhibitions/${ex.id}`)
 }
 
-async function openItem(ex) {
-  currentEx.value = ex
-  itemForm.collection_id = null
-  itemForm.display_location = ''
-  candidates.value = await collectionApi.list({ status: '在库' })
-  itemDialog.value = true
-}
-
-async function submitItem() {
-  if (!itemForm.collection_id) {
-    ElMessage.warning('请选择藏品')
-    return
+function counts(items) {
+  return {
+    planned: items.filter((i) => i.status === '待布展').length,
+    mounted: items.filter((i) => i.status === '已布展').length,
+    dismounted: items.filter((i) => i.status === '已撤展').length,
   }
-  await exhibitionApi.addItem(currentEx.value.id, { ...itemForm })
-  ElMessage.success('已布展,藏品状态更新为「展陈中」')
-  itemDialog.value = false
-  load()
-}
-
-function openDismount(ex, item) {
-  dismountTarget.value = { ex, item }
-  returnLocation.value = null
-  dismountDialog.value = true
-}
-
-async function submitDismount() {
-  await exhibitionApi.dismount(
-    dismountTarget.value.ex.id,
-    dismountTarget.value.item.id,
-    returnLocation.value
-  )
-  ElMessage.success('撤展完成')
-  dismountDialog.value = false
-  load()
 }
 
 const statusType = { 筹备中: 'info', 开展中: 'primary', 已结束: 'success' }
 
-onMounted(async () => {
-  locations.value = await locationApi.list({ location_type: '库房' })
-  load()
-})
+onMounted(load)
 </script>
 
 <template>
   <div class="page-container">
     <h2 class="page-title">展陈管理</h2>
-    <p class="page-sub">管理馆内展览的生命周期与展品布展/撤展过程</p>
+    <p class="page-sub">
+      维护可冻结的展品清单与展位安装计划,布展/撤展现场验收留痕,异常项持续跟踪至闭环
+    </p>
 
     <el-card shadow="never">
       <div class="toolbar">
@@ -123,18 +91,35 @@ onMounted(async () => {
 
       <el-row :gutter="14" v-loading="loading">
         <el-col v-for="ex in rows" :key="ex.id" :span="8" style="margin-bottom:14px">
-          <el-card class="ex-card" shadow="hover">
+          <el-card
+            class="ex-card"
+            shadow="hover"
+            @click="router.push(`/exhibitions/${ex.id}`)"
+          >
             <div class="ex-head">
-              <el-tag size="small" :type="statusType[ex.status]">{{ ex.status }}</el-tag>
-              <el-button
-                link
-                type="primary"
+              <div>
+                <el-tag size="small" :type="statusType[ex.status]">{{ ex.status }}</el-tag>
+                <el-tag
+                  v-if="ex.frozen"
+                  size="small"
+                  type="warning"
+                  effect="dark"
+                  style="margin-left:6px"
+                >
+                  清单已冻结
+                </el-tag>
+                <el-tag v-else size="small" type="info" effect="plain" style="margin-left:6px">
+                  清单编制中
+                </el-tag>
+              </div>
+              <el-tag
+                v-if="ex.open_anomaly_count"
                 size="small"
-                :disabled="ex.status === '已结束'"
-                @click="openItem(ex)"
+                type="danger"
+                effect="dark"
               >
-                + 布展藏品
-              </el-button>
+                {{ ex.open_anomaly_count }} 项异常未闭环
+              </el-tag>
             </div>
             <h3 class="ex-title">{{ ex.title }}</h3>
             <div class="ex-meta">
@@ -145,23 +130,22 @@ onMounted(async () => {
             </div>
             <div class="ex-meta" v-if="ex.curator">策展人:{{ ex.curator }}</div>
             <el-divider style="margin:10px 0" />
-            <div class="items">
-              <el-empty v-if="!ex.items.length" description="暂无展品" :image-size="40" />
-              <div v-for="it in ex.items" :key="it.id" class="item-row">
-                <el-tag size="small" :type="it.status === '已布展' ? 'primary' : 'info'" effect="plain">
-                  {{ it.status }}
-                </el-tag>
-                <span class="item-name">{{ it.accession_no }} {{ it.collection_name }}</span>
-                <el-button
-                  v-if="it.status === '已布展' && ex.status !== '已结束'"
-                  link
-                  type="warning"
-                  size="small"
-                  @click="openDismount(ex, it)"
-                >
-                  撤展
-                </el-button>
-              </div>
+            <div class="counts">
+              <span>展品 {{ ex.items.length }} 件</span>
+              <el-tag size="small" type="info" effect="plain">
+                待布展 {{ counts(ex.items).planned }}
+              </el-tag>
+              <el-tag size="small" type="primary" effect="plain">
+                已布展 {{ counts(ex.items).mounted }}
+              </el-tag>
+              <el-tag size="small" type="success" effect="plain">
+                已撤展 {{ counts(ex.items).dismounted }}
+              </el-tag>
+            </div>
+            <div class="enter">
+              <el-button link type="primary" size="small">
+                进入展览详情<el-icon style="margin-left:2px"><ArrowRight /></el-icon>
+              </el-button>
             </div>
           </el-card>
         </el-col>
@@ -176,7 +160,7 @@ onMounted(async () => {
         <el-form-item label="展厅" prop="venue">
           <el-input v-model="form.venue" placeholder="如 第一展厅 / 临时展厅" />
         </el-form-item>
-        <el-form-item label="展期">
+        <el-form-item label="展期" required>
           <el-date-picker
             v-model="form.range"
             type="daterange"
@@ -197,49 +181,7 @@ onMounted(async () => {
       </el-form>
       <template #footer>
         <el-button @click="createDialog = false">取消</el-button>
-        <el-button type="primary" @click="submitCreate">创建</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="itemDialog" :title="`布展藏品 · ${currentEx?.title || ''}`" width="520px">
-      <el-form :model="itemForm" label-width="80px">
-        <el-form-item label="选择藏品">
-          <el-select v-model="itemForm.collection_id" filterable style="width:100%" placeholder="仅显示在库藏品">
-            <el-option
-              v-for="c in candidates"
-              :key="c.id"
-              :label="`${c.accession_no} ${c.name}`"
-              :value="c.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="展位">
-          <el-input v-model="itemForm.display_location" placeholder="如 独立展柜 C-01" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="itemDialog = false">取消</el-button>
-        <el-button type="primary" @click="submitItem">确认布展</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="dismountDialog" title="撤展归库" width="440px">
-      <p>将「{{ dismountTarget.item?.collection_name }}」从「{{ dismountTarget.ex?.title }}」撤展。</p>
-      <el-form label-width="92px">
-        <el-form-item label="归库位置">
-          <el-select v-model="returnLocation" clearable filterable style="width:100%" placeholder="不选则登记为出库中">
-            <el-option
-              v-for="l in locations"
-              :key="l.id"
-              :label="`${l.code} ${l.name}`"
-              :value="l.id"
-            />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dismountDialog = false">取消</el-button>
-        <el-button type="warning" @click="submitDismount">确认撤展</el-button>
+        <el-button type="primary" @click="submitCreate">创建并维护清单</el-button>
       </template>
     </el-dialog>
   </div>
@@ -247,7 +189,8 @@ onMounted(async () => {
 
 <style scoped>
 .ex-card {
-  min-height: 250px;
+  cursor: pointer;
+  min-height: 230px;
 }
 .ex-head {
   display: flex;
@@ -267,14 +210,16 @@ onMounted(async () => {
   color: #606266;
   margin-top: 4px;
 }
-.item-row {
+.counts {
   display: flex;
-  align-items: center;
   gap: 8px;
-  padding: 4px 0;
+  align-items: center;
   font-size: 13px;
+  color: #606266;
+  flex-wrap: wrap;
 }
-.item-name {
-  flex: 1;
+.enter {
+  margin-top: 8px;
+  text-align: right;
 }
 </style>
